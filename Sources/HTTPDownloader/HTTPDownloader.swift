@@ -5,7 +5,10 @@ import NIOHTTP1
 import KwiftUtility
 
 public final class HTTPClientFileDownloader: HTTPClientResponseDelegate {
-  init(handle: NIOFileHandle, io: NonBlockingFileIO, onProgressChange: @escaping (Int64, Int64) -> Void) {
+
+  public typealias ProgressHandler = (Int64, Int64) -> Void
+
+  init(handle: NIOFileHandle, io: NonBlockingFileIO, onProgressChange: ProgressHandler?) {
     self.handle = handle
     self.io = io
     startDate = .init()
@@ -23,11 +26,11 @@ public final class HTTPClientFileDownloader: HTTPClientResponseDelegate {
 
   let handle: NIOFileHandle
   let io: NonBlockingFileIO
-//  var _buffer = ByteBuffer.init(ByteBufferView.init())
+  //  var _buffer = ByteBuffer.init(ByteBufferView.init())
   let startDate: Date
   private var currentBytes: Int64 = 0
   private var totalBytes: Int64 = 0
-  private let onProgressChange: (Int64, Int64) -> Void
+  private let onProgressChange: ProgressHandler?
 
   public func didReceiveHead(task: HTTPClient.Task<Response>, _ head: HTTPResponseHead) -> EventLoopFuture<Void> {
     //    dump(head.headers)
@@ -58,7 +61,7 @@ public final class HTTPClientFileDownloader: HTTPClientResponseDelegate {
     //      return task.eventLoop.makeSucceededFuture(())
     //    }
     currentBytes += numericCast(buffer.readableBytes)
-    self.onProgressChange(totalBytes, currentBytes)
+    self.onProgressChange?(totalBytes, currentBytes)
     return io.write(fileHandle: handle, buffer: buffer, eventLoop: task.eventLoop)
   }
 
@@ -82,16 +85,19 @@ public enum HTTPDownloaderError: Error {
 public protocol HTTPDownloaderTaskInfoProtocol {
   var url: URL { get }
   var outputURL: URL { get }
+  var watchProgress: Bool { get }
 }
 
 public struct HTTPDownloaderTaskInfo: HTTPDownloaderTaskInfoProtocol {
-  public init(url: URL, outputURL: URL) {
+  public init(url: URL, outputURL: URL, watchProgress:  Bool) {
     self.url = url
     self.outputURL = outputURL
+    self.watchProgress = watchProgress
   }
 
   public let url: URL
   public let outputURL: URL
+  public let watchProgress:  Bool
 }
 
 public protocol HTTPDownloaderDelegate {
@@ -102,6 +108,8 @@ public protocol HTTPDownloaderDelegate {
   func downloadStarted(downloader: HTTPDownloader<Self>, info: TaskInfo, task: HTTPClient.Task<HTTPClientFileDownloader.Response>)
   func downloadProgressChanged(downloader: HTTPDownloader<Self>, info: TaskInfo, total: Int64, downloaded: Int64)
   func downloadFinished(downloader: HTTPDownloader<Self>, info: TaskInfo, result: Result<HTTPClientFileDownloader.Response, Error>)
+  func downloadAllFinished(downloader: HTTPDownloader<Self>)
+
 }
 
 public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
@@ -125,59 +133,79 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
     self.delegate = delegate
   }
 
+  @inlinable
   public func download(info: D.TaskInfo) {
-    queueLock.lock()
-    defer {
-      queueLock.unlock()
-    }
-    if downloadingCount < maxCoucurrent {
-      _download(info: info)
-    } else {
-      queue.append(info)
-    }
+    download(contentsOf: CollectionOfOne(info))
   }
 
-  private func downloadingFinished() {
+  public func download<C>(contentsOf infos: C) where C: Sequence, C.Element == D.TaskInfo {
     queueLock.lock()
     defer {
       queueLock.unlock()
     }
-    precondition(downloadingCount > 0)
-    downloadingCount -= 1
+    queue.append(contentsOf: infos)
+    downloadNextItem(hasFinishedItem: false)
+  }
+
+  private func downloadNextItem(hasFinishedItem: Bool) {
+    queueLock.lock()
+    defer {
+      queueLock.unlock()
+    }
+    if hasFinishedItem {
+      precondition(downloadingCount > 0)
+      downloadingCount -= 1
+    }
     if queue.isEmpty && downloadingCount == 0 {
-      //      onAllTaskFinished?()
-    } else if !queue.isEmpty && downloadingCount < maxCoucurrent {
-      let firstItem = queue.removeFirst()!
-      _download(info: firstItem)
+      self.delegateThreadPool.submit { _ in
+        self.delegate.downloadAllFinished(downloader: self)
+      }
+    } else {
+      while downloadingCount < maxCoucurrent, let firstItem = queue.removeFirst() {
+        downloadingCount += 1
+        _download(info: firstItem)
+      }
     }
   }
 
   private func _download(info: D.TaskInfo) {
     //    precondition(!fm.fileExistance(at: info.outputURL).exists)
-    downloadingCount += 1
     delegateThreadPool.submit { _ in
       self.delegate.downloadWillStart(downloader: self, info: info)
     }
-    let handle = try! NIOFileHandle(
-      path: info.outputURL.path,
-      mode: .write,
-      flags: .allowFileCreation())
+    do {
+      let handle = try NIOFileHandle(
+        path: info.outputURL.path,
+        mode: .write,
+        flags: .allowFileCreation())
 
-    let handler = HTTPClientFileDownloader(handle: handle, io: fileIO) { total, current in
-      self.delegateThreadPool.submit { _ in
-        self.delegate.downloadProgressChanged(downloader: self, info: info, total: total, downloaded: current)
+      let handler: HTTPClientFileDownloader.ProgressHandler?
+      if info.watchProgress {
+        handler =  { total, current in
+          self.delegateThreadPool.submit { _ in
+            self.delegate.downloadProgressChanged(downloader: self, info: info, total: total, downloaded: current)
+          }
+        }
+      } else {
+        handler = nil
+      }
+
+      let httpHandler = HTTPClientFileDownloader(handle: handle, io: fileIO, onProgressChange: handler)
+      let task = try httpClient.execute(request: HTTPClient.Request(url: info.url),
+                                        delegate: httpHandler)
+      _ = task.futureResult.always { result in
+        self.delegateThreadPool.submit { _ in
+          self.delegate.downloadFinished(downloader: self, info: info, result: result)
+        }
+        self.downloadNextItem(hasFinishedItem: true)
+      }
+      delegateThreadPool.submit { _ in
+        self.delegate.downloadStarted(downloader: self, info: info, task: task)
+      }
+    } catch {
+      delegateThreadPool.submit { _ in
+        self.delegate.downloadFinished(downloader: self, info: info, result: .failure(error))
       }
     }
-
-    let task = try! httpClient.execute(request: HTTPClient.Request(url: info.url),
-                                       delegate: handler)
-    _ = task.futureResult.always { result in
-      self.delegateThreadPool.submit { _ in
-        self.delegate.downloadFinished(downloader: self, info: info, result: result)
-      }
-      self.downloadingFinished()
-    }
-    self.delegate.downloadStarted(downloader: self, info: info, task: task)
-    //    return task
   }
 }
