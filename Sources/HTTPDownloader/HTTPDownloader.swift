@@ -7,11 +7,14 @@ import KwiftUtility
 public final class HTTPClientFileDownloader: HTTPClientResponseDelegate {
 
   public typealias ProgressHandler = (Int64, Int64) -> Void
+  public typealias HeadHandler = (HTTPResponseHead) throws -> Void
 
-  init(handle: NIOFileHandle, io: NonBlockingFileIO, onProgressChange: ProgressHandler?) {
+  init(handle: NIOFileHandle, io: NonBlockingFileIO,
+       headHandler: @escaping HeadHandler, onProgressChange: ProgressHandler?) {
     self.handle = handle
     self.io = io
     startDate = .init()
+    self.headHandler = headHandler
     self.onProgressChange = onProgressChange
   }
 
@@ -30,10 +33,17 @@ public final class HTTPClientFileDownloader: HTTPClientResponseDelegate {
   let startDate: Date
   private var currentBytes: Int64 = 0
   private var totalBytes: Int64 = 0
+  private let headHandler: HeadHandler
   private let onProgressChange: ProgressHandler?
 
   public func didReceiveHead(task: HTTPClient.Task<Response>, _ head: HTTPResponseHead) -> EventLoopFuture<Void> {
     //    dump(head.headers)
+    do {
+      try headHandler(head)
+    } catch {
+      return task.eventLoop.makeFailedFuture(error)
+    }
+
     switch head.status {
     case .ok:
       if let length = Int64(head.headers["Content-Length"].first ?? "") {
@@ -66,15 +76,11 @@ public final class HTTPClientFileDownloader: HTTPClientResponseDelegate {
   }
 
   public func didFinishRequest(task: HTTPClient.Task<Response>) throws -> Response {
-    .init(startDate: startDate, endDate: .init())
+    try handle.close()
+    return .init(startDate: startDate, endDate: .init())
   }
 
   deinit {
-    do {
-      try handle.close()
-    } catch {
-      print("Failed to close file handle \(error)")
-    }
   }
 }
 
@@ -106,10 +112,25 @@ public protocol HTTPDownloaderDelegate {
 
   func downloadWillStart(downloader: HTTPDownloader<Self>, info: TaskInfo)
   func downloadStarted(downloader: HTTPDownloader<Self>, info: TaskInfo, task: HTTPClient.Task<HTTPClientFileDownloader.Response>)
+  func downloadDidReceiveHead(downloader: HTTPDownloader<Self>, info: TaskInfo, head: HTTPResponseHead) throws
   func downloadProgressChanged(downloader: HTTPDownloader<Self>, info: TaskInfo, total: Int64, downloaded: Int64)
   func downloadFinished(downloader: HTTPDownloader<Self>, info: TaskInfo, result: Result<HTTPClientFileDownloader.Response, Error>)
   func downloadAllFinished(downloader: HTTPDownloader<Self>)
 
+}
+
+public extension HTTPDownloaderDelegate {
+  func downloadWillStart(downloader: HTTPDownloader<Self>, info: TaskInfo) {}
+
+  func downloadStarted(downloader: HTTPDownloader<Self>, info: TaskInfo, task: HTTPClient.Task<HTTPClientFileDownloader.Response>) {}
+
+  func downloadDidReceiveHead(downloader: HTTPDownloader<Self>, info: TaskInfo, head: HTTPResponseHead) throws {}
+
+  func downloadProgressChanged(downloader: HTTPDownloader<Self>, info: TaskInfo, total: Int64, downloaded: Int64) {}
+
+  func downloadFinished(downloader: HTTPDownloader<Self>, info: TaskInfo, result: Result<HTTPClientFileDownloader.Response, Error>) {}
+
+  func downloadAllFinished(downloader: HTTPDownloader<Self>) {}
 }
 
 public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
@@ -198,7 +219,9 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
         handler = nil
       }
 
-      let httpHandler = HTTPClientFileDownloader(handle: handle, io: fileIO, onProgressChange: handler)
+      let httpHandler = HTTPClientFileDownloader(handle: handle, io: fileIO, headHandler: { head in
+        try self.delegate.downloadDidReceiveHead(downloader: self, info: info, head: head)
+      }, onProgressChange: handler)
       let task = try httpClient.execute(request: HTTPClient.Request(url: info.url),
                                         delegate: httpHandler)
       _ = task.futureResult.always { result in
