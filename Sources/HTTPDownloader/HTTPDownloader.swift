@@ -138,6 +138,14 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
     download(contentsOf: CollectionOfOne(info))
   }
 
+  public func cancelAll() {
+    queueLock.lock()
+    defer {
+      queueLock.unlock()
+    }
+    queue.removeAll()
+  }
+
   public func download<C>(contentsOf infos: C) where C: Sequence, C.Element == D.TaskInfo {
     queueLock.lock()
     defer {
