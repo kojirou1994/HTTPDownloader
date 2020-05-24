@@ -76,11 +76,11 @@ public final class HTTPClientFileDownloader: HTTPClientResponseDelegate {
   }
 
   public func didFinishRequest(task: HTTPClient.Task<Response>) throws -> Response {
-    try handle.close()
     return .init(startDate: startDate, endDate: .init())
   }
 
   deinit {
+    try! handle.close()
   }
 }
 
