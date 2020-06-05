@@ -4,15 +4,17 @@ import PackageDescription
 
 let package = Package(
   name: "HTTPDownloader",
+  platforms: [
+    .macOS(.v10_15)
+  ],
   products: [
     .library(
       name: "HTTPDownloader",
       targets: ["HTTPDownloader"]),
   ],
   dependencies: [
-    // Dependencies declare other packages that this package depends on.
     .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.1.0"),
-    .package(url: "https://github.com/kojirou1994/Kwift.git", from: "0.5.0")
+    .package(url: "https://github.com/kojirou1994/Kwift.git",  .upToNextMinor(from: "0.6.0"))
   ],
   targets: [
     .target(
