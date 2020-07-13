@@ -15,8 +15,8 @@
         "repositoryURL": "https://github.com/kojirou1994/Kwift.git",
         "state": {
           "branch": null,
-          "revision": "84198364ac937174c5f9c599d63e2e62c63fa2e5",
-          "version": "0.5.9"
+          "revision": "8b102c5e2e67324e3686d97f9eb6a06f47e30e89",
+          "version": "0.7.0"
         }
       },
       {
@@ -24,8 +24,8 @@
         "repositoryURL": "https://github.com/apple/swift-nio.git",
         "state": {
           "branch": null,
-          "revision": "c5fa0b456524cd73dc3ddbb263d4f46c20b86ca3",
-          "version": "2.17.0"
+          "revision": "8a865bd15e69526cbdfcfd7c47698eb20b2ba951",
+          "version": "2.19.0"
         }
       },
       {
@@ -42,8 +42,8 @@
         "repositoryURL": "https://github.com/apple/swift-nio-ssl.git",
         "state": {
           "branch": null,
-          "revision": "10e0e17dd47b594c3d864a063f343d716e33e5c1",
-          "version": "2.7.3"
+          "revision": "d381bc53edd9de88a75480a2b969bfc26d61ee76",
+          "version": "2.8.0"
         }
       }
     ]
