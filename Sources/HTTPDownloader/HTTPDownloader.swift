@@ -138,6 +138,7 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
   private let fileIO: NonBlockingFileIO
   private let ioPool = NIOThreadPool(numberOfThreads: 1)
   private let maxCoucurrent: Int
+  private let timeout: TimeAmount
 
   public private(set) var queue = Queue<D.TaskInfo>()
   private var downloadingCount = 0
@@ -145,12 +146,15 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
   private let delegate: D
   private let delegateThreadPool = NIOThreadPool(numberOfThreads: 1)
 
-  public init(httpClient: HTTPClient, maxCoucurrent: Int = 2, delegate: D) {
+  public init(httpClient: HTTPClient,
+              maxCoucurrent: Int = 2, timeout: TimeAmount = .minutes(1),
+              delegate: D) {
     ioPool.start()
     delegateThreadPool.start()
     fileIO = .init(threadPool: ioPool)
     self.httpClient = httpClient
     self.maxCoucurrent = maxCoucurrent
+    self.timeout = timeout
     self.delegate = delegate
   }
 
@@ -223,7 +227,8 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
         try self.delegate.downloadDidReceiveHead(downloader: self, info: info, head: head)
       }, onProgressChange: handler)
       let task = try httpClient.execute(request: HTTPClient.Request(url: info.url),
-                                        delegate: httpHandler)
+                                        delegate: httpHandler,
+                                        deadline: .now() + timeout)
       _ = task.futureResult.always { result in
         self.delegateThreadPool.submit { _ in
           self.delegate.downloadFinished(downloader: self, info: info, result: result)
