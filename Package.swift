@@ -14,7 +14,7 @@ let package = Package(
   ],
   dependencies: [
     .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.1.0"),
-    .package(url: "https://github.com/kojirou1994/Kwift.git",  .upToNextMinor(from: "0.7.0"))
+    .package(url: "https://github.com/kojirou1994/Kwift.git", from: "0.8.0")
   ],
   targets: [
     .target(
