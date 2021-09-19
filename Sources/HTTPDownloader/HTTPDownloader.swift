@@ -139,6 +139,7 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
   private let ioPool = NIOThreadPool(numberOfThreads: 1)
   private let maxCoucurrent: Int
   private let timeout: TimeAmount
+  private let retryLimit: Int
 
   public private(set) var queue = Deque<D.TaskInfo>()
   private var downloadingCount = 0
@@ -147,12 +148,14 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
   private let delegateThreadPool = NIOThreadPool(numberOfThreads: 1)
 
   public init(httpClient: HTTPClient,
+              retryLimit: Int = 0,
               maxCoucurrent: Int = 2, timeout: TimeAmount = .minutes(1),
               delegate: D) {
     ioPool.start()
     delegateThreadPool.start()
     fileIO = .init(threadPool: ioPool)
     self.httpClient = httpClient
+    self.retryLimit = retryLimit
     self.maxCoucurrent = maxCoucurrent
     self.timeout = timeout
     self.delegate = delegate
@@ -175,7 +178,10 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
     queue.removeAll()
   }
 
-  public func download<C>(contentsOf infos: C) where C: Sequence, C.Element == D.TaskInfo {
+  public func download<C>(contentsOf infos: C) where C: Collection, C.Element == D.TaskInfo {
+    if _slowPath(infos.isEmpty) {
+      return
+    }
     queueLock.lock()
     defer {
       queueLock.unlock()
@@ -201,12 +207,12 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
       while downloadingCount < maxCoucurrent, !queue.isEmpty {
         let firstItem = queue.removeFirst()
         downloadingCount += 1
-        _download(info: firstItem)
+        _download(info: firstItem, restRetry: retryLimit)
       }
     }
   }
 
-  private func _download(info: D.TaskInfo) {
+  private func _download(info: D.TaskInfo, restRetry: Int) {
     //    precondition(!fm.fileExistance(at: info.outputURL).exists)
     delegateThreadPool.submit { _ in
       self.delegate.downloadWillStart(downloader: self, info: info)
@@ -238,7 +244,12 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
         self.delegateThreadPool.submit { _ in
           self.delegate.downloadFinished(downloader: self, info: info, result: result)
         }
-        self.downloadNextItem(hasFinishedItem: true)
+        if case .failure = result, restRetry > 0 {
+          //retry
+          self._download(info: info, restRetry: restRetry-1)
+        } else {
+          self.downloadNextItem(hasFinishedItem: true)
+        }
       }
       delegateThreadPool.submit { _ in
         self.delegate.downloadStarted(downloader: self, info: info, task: task)
