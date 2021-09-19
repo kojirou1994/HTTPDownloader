@@ -158,7 +158,11 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
     self.delegate = delegate
   }
 
-  @inlinable
+  deinit {
+    try! ioPool.syncShutdownGracefully()
+    try! delegateThreadPool.syncShutdownGracefully()
+  }
+
   public func download(info: D.TaskInfo) {
     download(contentsOf: CollectionOfOne(info))
   }
