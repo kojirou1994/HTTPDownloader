@@ -2,7 +2,7 @@ import Foundation
 import NIO
 import AsyncHTTPClient
 import NIOHTTP1
-import KwiftUtility
+import DequeModule
 
 public final class HTTPClientFileDownloader: HTTPClientResponseDelegate {
 
@@ -140,7 +140,7 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
   private let maxCoucurrent: Int
   private let timeout: TimeAmount
 
-  public private(set) var queue = Queue<D.TaskInfo>()
+  public private(set) var queue = Deque<D.TaskInfo>()
   private var downloadingCount = 0
   private let queueLock: NSRecursiveLock = .init()
   private let delegate: D
@@ -194,7 +194,8 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
         self.delegate.downloadAllFinished(downloader: self)
       }
     } else {
-      while downloadingCount < maxCoucurrent, let firstItem = queue.removeFirst() {
+      while downloadingCount < maxCoucurrent, !queue.isEmpty {
+        let firstItem = queue.removeFirst()
         downloadingCount += 1
         _download(info: firstItem)
       }

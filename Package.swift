@@ -4,24 +4,19 @@ import PackageDescription
 
 let package = Package(
   name: "HTTPDownloader",
-  platforms: [
-    .macOS(.v10_15)
-  ],
   products: [
-    .library(
-      name: "HTTPDownloader",
-      targets: ["HTTPDownloader"]),
+    .library(name: "HTTPDownloader", targets: ["HTTPDownloader"]),
   ],
   dependencies: [
     .package(url: "https://github.com/swift-server/async-http-client.git", from: "1.1.0"),
-    .package(url: "https://github.com/kojirou1994/Kwift.git", from: "0.8.0")
+    .package(url: "https://github.com/apple/swift-collections.git", from: "1.0.0"),
   ],
   targets: [
     .target(
       name: "HTTPDownloader",
       dependencies: [
         .product(name: "AsyncHTTPClient", package: "async-http-client"),
-        .product(name: "KwiftUtility", package: "Kwift")
+        .product(name: "DequeModule", package: "swift-collections"),
     ]),
     .testTarget(
       name: "HTTPDownloaderTests",
