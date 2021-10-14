@@ -92,6 +92,14 @@ public protocol HTTPDownloaderTaskInfoProtocol {
   var url: URL { get }
   var outputURL: URL { get }
   var watchProgress: Bool { get }
+
+  func request() throws -> HTTPClient.Request
+}
+
+extension HTTPDownloaderTaskInfoProtocol {
+  public func request() throws -> HTTPClient.Request {
+    try .init(url: url)
+  }
 }
 
 public struct HTTPDownloaderTaskInfo: HTTPDownloaderTaskInfoProtocol {
@@ -237,7 +245,7 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
       let httpHandler = HTTPClientFileDownloader(handle: handle, io: fileIO, headHandler: { head in
         try self.delegate.downloadDidReceiveHead(downloader: self, info: info, head: head)
       }, onProgressChange: handler)
-      let task = try httpClient.execute(request: HTTPClient.Request(url: info.url),
+      let task = try httpClient.execute(request: info.request(),
                                         delegate: httpHandler,
                                         deadline: .now() + timeout)
       _ = task.futureResult.always { result in
