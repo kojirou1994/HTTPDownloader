@@ -249,13 +249,13 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
                                         delegate: httpHandler,
                                         deadline: .now() + timeout)
       _ = task.futureResult.always { result in
-        self.delegateThreadPool.submit { _ in
-          self.delegate.downloadFinished(downloader: self, info: info, result: result)
-        }
         if case .failure = result, restRetry > 0 {
           //retry
           self._download(info: info, restRetry: restRetry-1)
         } else {
+          self.delegateThreadPool.submit { _ in
+            self.delegate.downloadFinished(downloader: self, info: info, result: result)
+          }
           self.downloadNextItem(hasFinishedItem: true)
         }
       }
