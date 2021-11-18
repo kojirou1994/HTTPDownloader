@@ -6,10 +6,10 @@ import DequeModule
 
 public final class HTTPClientFileDownloader: HTTPClientResponseDelegate {
 
-  public typealias ProgressHandler = (Int64, Int64) -> Void
+  public typealias ProgressHandler = (_ total: Int64, _ current: Int64) -> Void
   public typealias HeadHandler = (HTTPResponseHead) throws -> Void
 
-  init(handle: NIOFileHandle, io: NonBlockingFileIO,
+  fileprivate init(handle: NIOFileHandle, io: NonBlockingFileIO,
        headHandler: @escaping HeadHandler, onProgressChange: ProgressHandler?) {
     self.handle = handle
     self.io = io
@@ -27,14 +27,18 @@ public final class HTTPClientFileDownloader: HTTPClientResponseDelegate {
     }
   }
 
-  let handle: NIOFileHandle
-  let io: NonBlockingFileIO
+  private let handle: NIOFileHandle
+  private let io: NonBlockingFileIO
   //  var _buffer = ByteBuffer.init(ByteBufferView.init())
   let startDate: Date
   private var currentBytes: Int64 = 0
   private var totalBytes: Int64 = 0
   private let headHandler: HeadHandler
   private let onProgressChange: ProgressHandler?
+
+  var bytesAllDownloaded: Bool {
+    totalBytes > 0 && currentBytes == totalBytes
+  }
 
   public func didReceiveHead(task: HTTPClient.Task<Response>, _ head: HTTPResponseHead) -> EventLoopFuture<Void> {
     //    dump(head.headers)
@@ -79,9 +83,10 @@ public final class HTTPClientFileDownloader: HTTPClientResponseDelegate {
     return .init(startDate: startDate, endDate: .init())
   }
 
-  deinit {
+  fileprivate func close() {
     try! handle.close()
   }
+
 }
 
 public enum HTTPDownloaderError: Error {
@@ -124,6 +129,7 @@ public protocol HTTPDownloaderDelegate {
   func downloadProgressChanged(downloader: HTTPDownloader<Self>, info: TaskInfo, total: Int64, downloaded: Int64)
   func downloadWillRetry(downloader: HTTPDownloader<Self>, info: TaskInfo, error: Error, restRetry: Int)
   func downloadFinished(downloader: HTTPDownloader<Self>, info: TaskInfo, result: Result<HTTPClientFileDownloader.Response, Error>)
+  /// called when download queue is empty.
   func downloadAllFinished(downloader: HTTPDownloader<Self>)
 
 }
@@ -151,6 +157,8 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
   private let maxCoucurrent: Int
   private let timeout: TimeAmount
   private let retryLimit: Int
+  /// ignore error, check only file is all downloaded
+  private let allowUncleanFinished: Bool
 
   public private(set) var queue = Deque<D.TaskInfo>()
   private var downloadingCount = 0
@@ -161,6 +169,7 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
   public init(httpClient: HTTPClient,
               retryLimit: Int = 0,
               maxCoucurrent: Int = 2, timeout: TimeAmount = .minutes(1),
+              allowUncleanFinished: Bool,
               delegate: D) {
     ioPool.start()
     delegateThreadPool.start()
@@ -170,6 +179,7 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
     self.maxCoucurrent = maxCoucurrent
     self.timeout = timeout
     self.delegate = delegate
+    self.allowUncleanFinished = allowUncleanFinished
   }
 
   deinit {
@@ -252,18 +262,35 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
                                         delegate: httpHandler,
                                         deadline: .now() + timeout)
       _ = task.futureResult.always { result in
-        if case let .failure(error) = result, restRetry > 0 {
+        httpHandler.close()
+
+        func retry(error: Error) {
           //retry
           let restRetry = restRetry - 1
           self.delegateThreadPool.submit { _ in
             self.delegate.downloadWillRetry(downloader: self, info: info, error: error, restRetry: restRetry)
           }
           self._download(info: info, restRetry: restRetry)
-        } else {
+        }
+
+        func finished() {
           self.delegateThreadPool.submit { _ in
             self.delegate.downloadFinished(downloader: self, info: info, result: result)
           }
           self.downloadNextItem(hasFinishedItem: true)
+        }
+
+        switch result {
+        case .success:
+          finished()
+        case .failure(let error):
+          if self.allowUncleanFinished, httpHandler.bytesAllDownloaded {
+            finished()
+          } else if restRetry > 0 {
+            retry(error: error)
+          } else {
+            finished()
+          }
         }
       }
       delegateThreadPool.submit { _ in
