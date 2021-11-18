@@ -122,6 +122,7 @@ public protocol HTTPDownloaderDelegate {
   func downloadStarted(downloader: HTTPDownloader<Self>, info: TaskInfo, task: HTTPClient.Task<HTTPClientFileDownloader.Response>)
   func downloadDidReceiveHead(downloader: HTTPDownloader<Self>, info: TaskInfo, head: HTTPResponseHead) throws
   func downloadProgressChanged(downloader: HTTPDownloader<Self>, info: TaskInfo, total: Int64, downloaded: Int64)
+  func downloadWillRetry(downloader: HTTPDownloader<Self>, info: TaskInfo, error: Error, restRetry: Int)
   func downloadFinished(downloader: HTTPDownloader<Self>, info: TaskInfo, result: Result<HTTPClientFileDownloader.Response, Error>)
   func downloadAllFinished(downloader: HTTPDownloader<Self>)
 
@@ -135,6 +136,8 @@ public extension HTTPDownloaderDelegate {
   func downloadDidReceiveHead(downloader: HTTPDownloader<Self>, info: TaskInfo, head: HTTPResponseHead) throws {}
 
   func downloadProgressChanged(downloader: HTTPDownloader<Self>, info: TaskInfo, total: Int64, downloaded: Int64) {}
+
+  func downloadWillRetry(downloader: HTTPDownloader<Self>, info: TaskInfo, error: Error, restRetry: Int) {}
 
   func downloadFinished(downloader: HTTPDownloader<Self>, info: TaskInfo, result: Result<HTTPClientFileDownloader.Response, Error>) {}
 
@@ -249,9 +252,13 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
                                         delegate: httpHandler,
                                         deadline: .now() + timeout)
       _ = task.futureResult.always { result in
-        if case .failure = result, restRetry > 0 {
+        if case let .failure(error) = result, restRetry > 0 {
           //retry
-          self._download(info: info, restRetry: restRetry-1)
+          let restRetry = restRetry - 1
+          self.delegateThreadPool.submit { _ in
+            self.delegate.downloadWillRetry(downloader: self, info: info, error: error, restRetry: restRetry)
+          }
+          self._download(info: info, restRetry: restRetry)
         } else {
           self.delegateThreadPool.submit { _ in
             self.delegate.downloadFinished(downloader: self, info: info, result: result)
@@ -263,6 +270,7 @@ public final class HTTPDownloader<D: HTTPDownloaderDelegate> {
         self.delegate.downloadStarted(downloader: self, info: info, task: task)
       }
     } catch {
+      // No retry handling
       delegateThreadPool.submit { _ in
         self.delegate.downloadFinished(downloader: self, info: info, result: .failure(error))
       }
